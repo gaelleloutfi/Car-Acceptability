@@ -1,0 +1,824 @@
+---
+title: 'Assignment 2 - Classification and resampling methods'
+author: "by Jana Jaber, Hadi Bazzi, and Gaelle Loutfi"
+date: "(November 18, 2023)"
+output:
+  html_document:
+    theme: readable
+    highlight: zenburn
+    number_sections: no
+    toc: yes
+    toc_depth: 3
+    toc_float:
+      collapsed: yes
+      smooth_scroll: yes
+  pdf_document:
+    toc: yes
+    toc_depth: '3'
+---
+
+# Car Acceptability Data Set
+For this assignment, we will be using a dataset named "DataAssign2.csv". The dataset comprises several features, each with a set of categorical values, that are hypothesized to influence the overall acceptability of a car.
+
+* We will begin by changing the predictor names to have a more meaningful variables.
+
+```{r message=FALSE, warning=FALSE}
+# Load the necessary library
+library(readr)
+
+# Load the dataset
+data <- read_csv("DataAssign2.csv")
+
+# Rename the columns
+colnames(data) <- c("Car_Price", "Maintenance_Price", "Nb_of_Doors", 
+                    "Car_Capacity", "Luggage_Size", "Car_Safety", 
+                    "Car_Acceptability")
+
+# Overwrite the dataset with the new column names
+write_csv(data, "DataAssign2.csv")
+```
+* What is the `dimension` of our dataset?
+```{r}
+dim(data)
+```
+* What are the `variables` in our dataset?
+```{r}
+names(data)
+```
+
+* Importing Libraries 
+```{r echo=TRUE, message=FALSE, warning=FALSE, collapse=TRUE}
+library(tidyverse)
+library(ggplot2)
+library(gt)
+library(caret)
+library(MASS) # for LDA and QDA
+library(pROC) # for ROC curves
+library(broom)
+library(dplyr)
+library(readr)
+library(caret)
+library(knitr)
+library(reshape2)
+library(corrplot)
+library(tidyr)
+library(pROC)
+library(boot)
+library(class)
+library(ggthemes) # for additional themes
+library(ggrepel)  # for better label placement
+
+```
+
+* Missing Values 
+
+```{r}
+missing_values_per_column <- sapply(data, function(x) sum(is.na(x)))
+
+print(missing_values_per_column)
+
+```
+
+* How our dataset `looks like`?
+```{r}
+data %>%
+  slice(1:5) %>%
+  gt() 
+```
+***
+# Exploring the Data  Graphically
+To explore the data graphically and investigate the association between the response ("Car Acceptability") and other features, we can use various types of plots.
+One effective way to visualize the association between a categorical response and other categorical features is through bar plots. These plots can help in understanding the distribution of categories in relation to the response variable.
+
+
+## Bar Graphs
+* Plotting the **Bar Graphs**
+```{r echo=FALSE}
+
+my_colors <- c("lightpink", "lightblue")
+
+# List of features excluding the response variable
+features <- setdiff(names(data), "Car_Acceptability")
+
+# Loop through each feature and create a plot
+plots <- list()
+for (feature in features) {
+p <- ggplot(data, aes(x = .data[[feature]], fill = Car_Acceptability)) +
+    geom_bar(position = "dodge") +
+    scale_fill_manual(values = my_colors) +
+    labs(title = paste("Association between", feature, "and Car_Acceptability"),
+         x = feature,
+         y = "Count") +
+    theme_classic() +
+  theme(text = element_text(size = 12),
+        axis.text.x = element_text(angle = 45, hjust = 1),
+        legend.position = "right")
+  
+  plots[[feature]] <- p
+}
+```
+
+
+```{r echo=FALSE}
+  print(plots[["Car_Price"]])
+```
+
+There is a noticeable variation in **car acceptability** across different **car prices**. Higher-priced cars tend to have a **higher frequency** of being rated as `'bad'`, while **lower-priced** cars show a more diverse distribution of acceptability ratings.This suggests that car price could be a **useful** predictor.
+
+***
+```{r echo=FALSE}
+  print(plots[["Maintenance_Price"]])
+```
+
+
+
+Similar to car price, **maintenance price** shows variation in the **car acceptability** distribution across its levels, with `'low'` showing a distinct pattern (Cars with lower maintenance costs are more likely to have better acceptability ratings). This indicates **potential** predictive power.
+
+***
+
+```{r echo=FALSE}
+  print(plots[["Nb_of_Doors"]])
+```
+
+This feature shows a **less clear association** with **car acceptability**. All categories ('2', '4', '5more') exhibit a mix of acceptability ratings, although cars with more doors ('5more') seem to have a slightly higher frequency of better acceptability. This may suggest that it has **less predictive** power compared to previous predictors.
+
+***
+
+```{r echo=FALSE}
+  print(plots[["Car_Capacity"]])
+```
+
+There's a **noticeable trend** where cars with **higher capacity ('more')** are more frequently rated better in terms of **acceptability**, which may indicate **some predictive** utility.
+
+***
+
+```{r echo=FALSE}
+  print(plots[["Luggage_Size"]])
+```
+
+
+There is a **noticeable difference** in the response distribution for the 'big' category, while 'med' and 'small' are more **evenly distributed**. This feature might be useful, particularly the 'big' category.
+
+
+***
+
+```{r echo=FALSE}
+  print(plots[["Car_Safety"]])
+```
+
+**Car safety** appears to be a **significant factor**. Cars with 'high' safety ratings are much more likely to be acceptable compared to those with 'med' or 'low' safety ratings. This feature appears to be a **strong candidate** for prediction.
+
+***
+
+## Chi-Squared Test of Independence
+
+After plotting the bar graphs and analyzing the association between **Car acceptability** and each feature, we will be applying the Chi-Squared Test of Independence between each feature and the response to further investigate each association.
+
+```{r echo=FALSE}
+
+
+# List of features to test against the response 'Car Acceptability'
+features <- c('Car_Price', 'Maintenance_Price', 'Nb_of_Doors', 
+              'Car_Capacity', 'Luggage_Size', 'Car_Safety')
+
+# Function to perform Chi-Squared Test and return the p-value
+chi_squared_test <- function(feature, data) {
+  table <- table(data[[feature]], data$Car_Acceptability)
+  test <- chisq.test(table)
+  return(test$p.value)
+}
+
+# Applying the test to each feature and storing the results
+results <- sapply(features, chi_squared_test, data = data)
+
+
+# Convert the results into a tibble for better formatting
+results_tibble <- tibble(Feature = names(results), P_Value = results)
+
+# Print the results as a nicely formatted table without rounding the numbers
+knitr::kable(results_tibble, format = "html", caption = "Chi-Squared Test Results", digits = 30)
+
+```
+<br>
+
+* *Car Price, Maintenance Price, Car Capacity, and Car Safety* show **extremely low p-values**, indicating strong evidence **against the null hypothesis** of independence. This suggests that these features have **significant associations** with car acceptability.
+
+* *Luggage Size* also shows a **significant association (p < 0.05)**, but the strength of this association is less compared to previous features.
+
+* *Number of Doors*, with a **p-value greater than 0.05**, **does not show** a statistically significant association with *car acceptability*. This implies that the *number of doors* might not be a **crucial factor** in determining *car acceptability* in this dataset.
+
+* These findings **align** with the initial graphical analysis and provide a **quantitative** backing to the observed associations.
+
+
+```{r echo=FALSE, message=FALSE, include=FALSE}
+
+
+data$Car_Price <- as.integer(factor(data$Car_Price, levels = c("low", "med", "high", "vhigh"), ordered = TRUE))
+class(data$Car_Price)
+
+data$Maintenance_Price <- as.integer(factor(data$Maintenance_Price, levels = c("low", "med", "high", "vhigh"), ordered = TRUE))
+class(data$Maintenance_Price)
+
+
+data$Nb_of_Doors[data$Nb_of_Doors == "5more"] <- "5"
+data$Nb_of_Doors <- strtoi(data$Nb_of_Doors, 0L)
+class(data$Nb_of_Doors)
+
+
+data$Car_Capacity[data$Car_Capacity == "more"] <- "5"
+data$Car_Capacity <- strtoi(data$Car_Capacity, 0L)
+class(data$Car_Capacity)
+
+data$Luggage_Size <- as.integer(factor(data$Luggage_Size, levels = c("small", "med", "big"), ordered = TRUE))
+class(data$Luggage_Size)
+
+
+data$Car_Safety <- as.integer(factor(data$Car_Safety, levels = c("low", "med", "high"), ordered = TRUE))
+class(data$Car_Safety)
+
+data$Car_Acceptability[data$Car_Acceptability == "good"] <- "1"
+data$Car_Acceptability[data$Car_Acceptability == "bad"] <- "0"
+data$Car_Acceptability <- strtoi(data$Car_Acceptability, 0L)
+class(data$Car_Acceptability)
+
+
+```
+
+***
+
+## Heat Map
+
+After transforming our categorical variables into numerical format, we are able to evaluate the correlations among our variables by utilizing a heatmap.
+
+```{r echo=FALSE, message=FALSE}
+
+
+data.cor = cor(data)
+datao_long <- melt(data.cor)
+
+# Create the heatmap
+ggplot(datao_long, aes(Var1, Var2, fill = value)) +
+  geom_tile(color = "white") +
+  scale_fill_gradient2(low = "#6D9EC1", high = "#E46726", mid = "white", 
+                       midpoint = 0, limit = c(-1, 1), space = "Lab", 
+                       name="Pearson\nCorrelation") +
+  theme_minimal() +
+  coord_fixed() +
+  xlab("") +
+  ylab("") +
+  theme(axis.text.x = element_text(angle = 45, hjust = 1),
+        axis.title.x = element_blank(),
+        axis.title.y = element_blank())
+
+
+```
+
+
+* *Car Safety and Car Acceptability*: A **strong positive correlation** is observed, suggesting that cars with higher safety ratings are more likely to be considered acceptable. This relationship could be driven by consumer preferences for safety that tie acceptability to safety standards.
+
+* *Car Price, Car Maintenance and Car Acceptability*: A **strong negative correlation** is observed, suggesting that cars with higher prices or higher maintenance costs are more likely to be considered not acceptable.
+
+* *Car Price and Maintenance Price*: A **moderate positive correlation** indicates that more expensive cars tend to have higher maintenance costs. This could reflect the use of more costly parts and higher service charges associated with luxury vehicles.
+
+* *Number of Doors (Nb_of_Doors)*: This feature shows a **weak correlation** with other car attributes, implying that the number of doors may not be a significant factor in determining a car's acceptability. The number of doors may instead be a matter of design preference or practicality that varies with consumer needs.
+
+* *Car Capacity and Car Acceptability*: A **positive correlation** is observed,  hinting that cars with more space or power might be preferred.
+
+* *Luggage Size and Car Acceptability*: A **slight positive correlation** is observed,  indicating that cars with larger luggage size might be preferred.
+
+***
+
+## Violin Plot
+
+```{r echo=FALSE, message=FALSE}
+
+
+# Assuming 'datao' is your original data frame
+# Convert data to long format
+data_long <- gather(data, key = "variable", value = "value", -Car_Acceptability)
+
+# Create violin plot with additional statistics
+ggplot(data_long, aes(x = variable, y = value, fill = variable)) + 
+  geom_violin(trim = FALSE, scale = "area") +
+  geom_boxplot(width=0.1, fill="white") +  # Adds a boxplot inside each violin
+  stat_summary(fun=mean, geom="point", shape=20, size=3, color="darkred") +  # Adds mean points
+  scale_fill_manual(values = rep(c("lightblue", "lightpink"), length.out = length(unique(data_long$variable)))) +
+  labs(title = "Violin Plots of Car Attributes with Additional Statistics", x = "Variable", y = "Value") +
+  theme_minimal() +
+  theme(axis.text.x = element_text(angle = 90, vjust = 0.5, hjust=1))  # Rotate x labels for readability
+```
+
+
+
+* *Car_Capacity and Luggage_Size* show **symmetrical distributions**, suggesting a balanced spread of values around the median.
+
+* *Car_Price and Maintenance_Price* display **right-skewed** distributions, with tails extending toward higher values, indicating a subset of cars are significantly more expensive and costly to maintain.
+
+* *Car_Safety* exhibits a **peak below the median**, implying a clustering of lower safety ratings.
+
+* *Nb_of_Doors* has a **narrow distribution**, indicating less variation in the number of doors across different cars.
+
+
+***
+
+# Validation set approach
+
+* To split the dataset into a training set and a test set using the validation set approach, we will need to first set a random seed for reproducibility and then use a method to split the dataset.
+
+* We decided to split the dataset into *80% Training Set* and *20% Test Set*.
+
+* Opting for an 80-20 split in a dataset of 260 observations offers a balanced approach: it provides 208 observations for robust training, crucial for complex datasets, and reserves 52 for testing to effectively evaluate the model. This split avoids the limitations of a 50-50 split (insufficient training data) and a 70-30 split (excessively large test set), striking a good balance between reducing bias and assessing model variance.
+
+* We will use `createDataPartition function` from the caret package instead of the `sample function` since although `sample()` provides a basic method for random sampling and can be used for data splitting, `createDataPartition()` offers a more specialized and balanced approach, particularly useful for maintaining class proportions in classification problems. 
+
+```{r}
+set.seed(11)
+partition <- createDataPartition(y = data$Car_Acceptability, p = 0.80, list = FALSE)
+training_set <- data[partition, ]
+test_set <- data[-partition, ]
+
+```
+
+***
+
+# Logistic Regression 
+
+* First, we will begin by fitting the model with all the dataset features.
+
+```{r message=FALSE, warning=FALSE}
+set.seed(11)
+
+glm1.fit <- glm(Car_Acceptability ~ Car_Price + Maintenance_Price + 
+                 Car_Capacity + Luggage_Size + Nb_of_Doors+
+                 Car_Safety, data = training_set, family = binomial)
+summary(glm1.fit)
+
+```
+* *Car Price, Maintenance Price, and Car Safety* seemed to be **highly significant**.
+* *Car Capacity and Luggage Size* seemed to be **significant**.
+* *Number of Doors* seemed to be **not significant** where the number of doors doesn't seem to have a significant effect on car acceptability.
+
+* As a result, we will fit our logistic model **without** the *Nb of Doors* variable, and analyze its performance.
+
+```{r message=FALSE, warning=FALSE}
+set.seed(11)
+glm.fit <- glm(Car_Acceptability ~ Car_Price + Maintenance_Price + 
+                 Car_Capacity + Luggage_Size +
+                 Car_Safety, data = training_set, family = binomial)
+summary(glm.fit)
+
+```
+
+* In terms of **significance levels**, we obtain the same significance codes for the different variables as in the previous model indicating similar significance levels.
+
+* *Intercept*: The intercept's coefficient is -10.7584 with a p-value of 0.078503, indicating it is **not statistically** significant at the conventional 0.05 level.
+
+* **Higher** *Car_Price and Maintenance_Price* with **negative coefficients**, negatively affect acceptability, suggesting that more expensive cars or those with higher maintenance costs are less likely to be deemed acceptable.
+
+* *Car_Capacity, Luggage_Size, and Car_Safety* with **positive coefficients**, positively influence acceptability, meaning cars with larger capacity, more luggage space, and better safety features are more likely to be considered acceptable.
+
+***
+
+* **Logistic Regression Plot** illustrating the above findings:
+
+````{r echo = FALSE}
+tidy_glm <- tidy(glm.fit)
+
+ggplot(tidy_glm, aes(x = term, y = estimate)) +
+  geom_point(color = "pink") +
+  geom_errorbar(aes(ymin = estimate - std.error, ymax = estimate + std.error), 
+                width = 0.2, color = "lightblue") +
+  theme_minimal() +
+  labs(title = "Effects of Predictors on Car Acceptability",
+       x = "Predictor Variables",
+       y = "Effect Size (Log-Odds)")
+
+
+````
+
+***
+
+* **Confusion Matrix**:
+
+```{r message=TRUE}
+set.seed(11)
+
+predictions_prob = predict(glm.fit, test_set, type ="response")
+predictions <- ifelse(predictions_prob > 0.5, 1, 0)
+predictions = as.integer(predictions)
+
+# Print the confusion matrix
+confusion_matrix <- table(Actual = test_set$Car_Acceptability, Predicted = predictions)
+print(confusion_matrix)
+```
+* **True Negatives (TN)**: The number of observations correctly predicted as not acceptable `22`.
+
+* **False Positives (FP)**: The number of observations incorrectly predicted as acceptable when they are actually not `4`.
+
+* **False Negatives (FN)**: The number of observations incorrectly predicted as not acceptable when they are actually acceptable `1`.
+
+* **True Positives (TP)**: The number of observations correctly predicted as acceptable `25`.
+
+***
+
+```{r message=TRUE, echo=FALSE}
+set.seed(11)
+
+
+# Calculate the accuracy
+accuracy <- mean(predictions == test_set$Car_Acceptability)
+print(paste("Accuracy for Logistic Regression:",accuracy))
+
+predictions_factor <- as.factor(predictions)
+actual_factor <- factor(test_set$Car_Acceptability, levels = levels(predictions_factor))
+
+# Confusion matrix
+conf_matrix <- confusionMatrix(predictions_factor, actual_factor)
+
+# Test Error
+test_error <- 1 - conf_matrix$overall['Accuracy']
+
+# Recall (Sensitivity)
+recall <- conf_matrix$byClass['Sensitivity']
+
+# Precision
+precision <- conf_matrix$byClass['Precision']
+
+# F1 Score
+f1_score <- 2 * (precision * recall) / (precision + recall)
+
+# Printing the results
+print(paste("Test Error for Logistic Regression:", test_error))
+print(paste("Recall for Logistic Regression:", recall))
+print(paste("Precision for Logistic Regression:", precision))
+print(paste("F1 Score for Logistic Regression:", f1_score))
+
+
+
+```
+
+***
+
+* **Accuracy**: At approximately 0.903, it indicates that the logistic regression model correctly predicts the acceptability status (either acceptable or not acceptable) about 90.3% of the time.
+
+* **Test Error**: At about 0.096, this is the proportion of incorrect predictions made by the model on the test data, which complements the accuracy (1 - Accuracy).
+
+* **Recall**: The recall of approximately 0.846 indicates that the model correctly identifies 84.6% of all actual positive (acceptable) cases.
+
+* **Precision**: With a precision of about 0.956, this means that 95.6% of the instances predicted as positive (acceptable) by the model are indeed positive.
+
+* **F1 Score**: The F1 score is about 0.898, which is a harmonic mean of precision and recall. This high value suggests a good balance between precision and recall, indicating that the model is both accurate and reliable in its positive classifications.
+
+***
+
+# LDA
+
+* Fitting the LDA Model:
+
+```{r}
+set.seed(11)
+lda.fit <- lda(Car_Acceptability ~ Car_Price+Maintenance_Price + 
+                 Car_Capacity + Luggage_Size + Car_Safety, data = training_set)
+
+lda.fit
+```
+
+* The model assumes an equal chance of a car being acceptable or not before considering these factors.
+
+* Group Means: These are the average values of each predictor variable for each class. Notably, the group means for *Car_Price and Maintenance_Price * are **higher for the non-acceptable class** (0) than the acceptable class (1), suggesting that higher prices may be associated with non-acceptability. Conversely, *Car_Capacity, Luggage_Size, and Car_Safety* have **higher means for the acceptable class**, indicating that these features might contribute positively to a car's acceptability.
+
+* The LDA model output suggests that higher car and maintenance prices with `negative coefficients` contribute to cars being classified as non-acceptable, while greater capacity, luggage size, and safety  with `positive coefficients` are associated with acceptability.
+
+
+***
+
+* Performance of LDA on Test Data Set:
+```{r}
+set.seed(11)
+ldaPredictions <- predict(lda.fit, newdata = test_set)
+```
+
+```{r echo=FALSE}
+
+set.seed(11)
+predictions_lda <- as.integer(ldaPredictions$class) - 1
+
+# Predictions
+ldaPredictions <- predict(lda.fit, newdata = test_set)
+predictions_lda <- as.integer(ldaPredictions$class) - 1
+
+
+# Confusion Matrix
+conf_matrix_lda <- table(Predicted = predictions_lda, Actual = test_set$Car_Acceptability)
+#print("Confusion Matrix for LDA:")
+print(conf_matrix_lda)
+
+# Calculating performance metrics
+accuracy_lda <- sum(diag(conf_matrix_lda)) / sum(conf_matrix_lda)
+test_error_lda <- 1 - accuracy_lda
+recall_lda <- conf_matrix_lda[2, 2] / sum(conf_matrix_lda[2, ])
+precision_lda <- conf_matrix_lda[2, 2] / sum(conf_matrix_lda[, 2])
+f1_score_lda <- 2 * (precision_lda * recall_lda) / (precision_lda + recall_lda)
+
+
+# Printing the results
+print(paste("Accuracy for LDA:", accuracy_lda))
+print(paste("Test Error for LDA:", test_error_lda))
+print(paste("Recall for LDA:", recall_lda))
+print(paste("Precision for LDA:", precision_lda))
+print(paste("F1 Score for LDA:", f1_score_lda))
+
+```
+
+* The **LDA model** has an **accuracy of 90.38%**, meaning it correctly predicts car acceptability most of the time. This is **very similar** accuracy to the **logistic regression accuracy** obtained previously, taking into consideration that both are linear methods for classification.
+
+* It has **perfect precision**, indicating no false positives were predicted, and a **recall of 83.87%**, showing it correctly identified most of the acceptable cases.
+
+* The **F1 score of 0.912**, a balance of precision and recall, is also high.
+
+* **Test Error of 0.097** is significantly low.
+
+***
+
+# QDA
+
+* Fitting the LDA Model:
+
+```{r}
+set.seed(11)
+qda.fit <- qda(Car_Acceptability ~ Car_Price+Maintenance_Price + 
+                 Car_Capacity + Luggage_Size + Car_Safety, data = training_set)
+qda.fit
+```
+
+* QDA produces **same results** of `Group Means` and `Prior Probabilities` as LDA.
+
+***
+
+* Performance of QDA on Test Data Set:
+
+```{r}
+set.seed(11)
+qdaPredictions <- predict(qda.fit, newdata = test_set)
+```
+
+
+
+```{r echo=FALSE}
+set.seed(11)
+predictions_qda <- as.integer(qdaPredictions$class) - 1
+
+
+# Confusion Matrix
+conf_matrix_qda <- table(Predicted = predictions_qda, Actual = test_set$Car_Acceptability)
+print(conf_matrix_qda)
+
+
+accuracy_qda <- sum(diag(conf_matrix_qda)) / sum(conf_matrix_qda)
+test_error_qda <- 1 - accuracy_qda
+recall_qda <- conf_matrix_qda[2, 2] / sum(conf_matrix_qda[2, ])
+precision_qda <- conf_matrix_qda[2, 2] / sum(conf_matrix_qda[, 2])
+f1_score_qda <- 2 * (precision_qda * recall_qda) / (precision_qda + recall_qda)
+
+# Printing the results
+print(paste("Accuracy for QDA:", accuracy_qda))
+print(paste("Test Error for QDA:", test_error_qda))
+print(paste("Recall for QDA:", recall_qda))
+print(paste("Precision for QDA:", precision_qda))
+print(paste("F1 Score for QDA:", f1_score_qda))
+
+```
+
+* The QDA model has an **accuracy of 94.23%**, which is **higher** than that of LDA and Logistic Regression. This can be due to the fact that QDA, unlike LDA, does not assume equal covariance across classes, allowing for **more flexibility** in the shape of the decision boundary between classes.
+
+* As well QDA has a **lower test error of 5.77%** than both previous models, a **higher F1 score of 94.54%**, a **higher recall of 89.66%**, and **100% precision**.
+
+***
+
+# ROC Curves
+```{r echo=FALSE, message=FALSE}
+
+
+# Calculate ROC curves and AUC
+roc_logistic <- roc(response = test_set$Car_Acceptability, predictor = predictions_prob)
+roc_lda <- roc(response = test_set$Car_Acceptability, predictor = ldaPredictions$posterior[,2])
+roc_qda <- roc(response = test_set$Car_Acceptability, predictor = qdaPredictions$posterior[,2])
+
+# Create a data frame for ggplot
+roc_data <- data.frame(
+  cutpoint = c(roc_logistic$thresholds, roc_lda$thresholds, roc_qda$thresholds),
+  sensitivity = c(roc_logistic$sensitivities, roc_lda$sensitivities, roc_qda$sensitivities),
+  specificity = c(1 - roc_logistic$specificities, 1 - roc_lda$specificities, 1 - roc_qda$specificities),
+  model = factor(c(rep("Logistic", length(roc_logistic$sensitivities)),
+                   rep("LDA", length(roc_lda$sensitivities)),
+                   rep("QDA", length(roc_qda$sensitivities)))
+  )
+)
+
+# Plot ROC curves
+ggplot(roc_data, aes(x = 1 - specificity, y = sensitivity, color = model)) +
+  geom_line() +
+  labs(title = "ROC Curves Comparison", x = "1 - Specificity", y = "Sensitivity") +
+  scale_color_manual(values = c("blue", "violet", "black")) +
+  theme_minimal()
+
+# Print AUC values
+cat("AUC for Logistic Regression:", auc(roc_logistic), "\n")
+cat("AUC for LDA:", auc(roc_lda), "\n")
+cat("AUC for QDA:", auc(roc_qda), "\n")
+
+
+```
+
+* **QDA** has the highest AUC of *0.9866864*, which suggests that it is the most effective model among the three at classifying the output class in this dataset. The ROC curve for QDA is closer to the top-left corner of the plot, which is ideal.
+
+* **LDA** and **Logistic Regression** are close: The AUC values for LDA and Logistic Regression are very close to each other *(0.97)*, with LDA being slightly higher. This suggests that both models have similar classification power for this dataset, though LDA is marginally better.
+
+* Overall, **QDA** seems to be the best model for this particular dataset based on the ROC and AUC values, with **LDA** being a close second and **Logistic Regression** also performing well.
+
+***
+
+# KNN
+
+* Fitting the KNN model with **different k values** and testing the accuracy and test error rate for each.
+
+```{r echo=FALSE}
+# Set seed for reproducibility
+set.seed(75)
+
+featureDataTrain <- training_set[, c("Car_Price", "Maintenance_Price", "Car_Capacity", "Luggage_Size", "Car_Safety")]
+featureDataTest <- test_set[, c("Car_Price", "Maintenance_Price", "Car_Capacity", "Luggage_Size", "Car_Safety")]
+targetDataTrain <- training_set$Car_Acceptability
+targetDataTest <- test_set$Car_Acceptability
+
+```
+
+```{r}
+# Function to perform KNN and return accuracy
+performKNN <- function(k, featuresTrain, featuresTest, targetTrain, targetTest) {
+  knnPrediction <- knn(featuresTrain, featuresTest, targetTrain, k = k)
+  confusionMatrix <- table(Predicted = knnPrediction, Actual = targetTest)
+  accuracy <- sum(diag(confusionMatrix)) / sum(confusionMatrix)
+  return(accuracy)
+}
+
+# K values to test
+kValues <- c(3, 5, 7, 9, 15, 20,50)
+results <- sapply (kValues, performKNN, featureDataTrain, featureDataTest, targetDataTrain, targetDataTest)
+
+# Print accuracy amd test error for each k
+sapply(1:length(kValues), function(i) {
+  (paste("For k =", kValues[i], ", Accuracy =", results[i], ", Test Error: ", 1 - results[i]))
+})
+```
+
+* KNN has seemed to have the lowest *accuracy of 0.86* and highest *test error of 0.13* among LDA, QDA, and Logistic Regression with `k=20`.
+
+### Plotting K values and Error Rate
+
+```{r echo=FALSE, warning=FALSE, message=FALSE}
+
+
+errorRates <- 1 - results
+dataForPlot <- data.frame(K = kValues, ErrorRate = errorRates)
+
+# Plot error rates against K values with enhanced visuals
+ggplot(dataForPlot, aes(x = K, y = ErrorRate)) + 
+  geom_line(color = "steelblue", size = 1) +
+  geom_point(color = "orange", size = 3, shape = 21, fill = "white") +
+  theme_minimal(base_size = 14) +  # Using a minimal theme for a clean look
+  theme(plot.title = element_text(hjust = 0.5)) +  
+  ggtitle("K values with their corresponding test MSE") +
+  xlab("K values") +
+  ylab("Error rate") +
+  geom_text_repel(aes(label = ifelse(ErrorRate == min(ErrorRate), as.character(K), '')),
+                  box.padding = unit(0.5, "lines"),
+                  point.padding = unit(0.5, "lines")) 
+
+```
+
+* At **K<20**, the error rate is relatively high, suggesting that the model is **overfitting** to the noise or outliers in the training data.
+
+* There is an **optimal** K value around **K=20** where the error rate is at its lowest, which balances the *bias-variance trade-off* effectively..
+
+* As K **increases** beyond **20**, the error rate begins to rise significantly, suggesting that the model starts to **underfit** the data as it considers more distant neighbors.
+
+# K-Fold Cross Validation
+
+* We will perform **5-Fold Cross Validation** for the *QDA* method.
+
+```{r echo=FALSE, message=FALSE, warning=FALSE}
+set.seed(11)
+
+cv_qda <- function (myData, formula, yname = "Car_Acceptability", K = 5, seed = 11) {
+    n <- nrow(myData)
+    set.seed(seed)
+    # Partition the data into K=5 subsets
+    f <- ceiling(n / K)
+    s <- sample(rep(1:K, f), n)
+    accuracies <- numeric(K)
+    for (i in 1:K) {
+        test.index <- which(s == i)
+        train.index <- setdiff(seq_len(n), test.index)
+        # Fit QDA model with training data
+        qda.fit <- qda(formula, data = myData[train.index,])
+
+        # Predicted test set labels
+        qda.predy <- as.character(predict(qda.fit, myData[test.index,])$class)
+
+        # Observed test set labels
+        qda.y <- as.character(myData[test.index, yname, drop = TRUE])
+
+        # Calculate accuracy for this fold
+        accuracies[i] <- mean(qda.y == qda.predy)
+    }
+    # Calculate average accuracy
+    avg_accuracy <- mean(accuracies)
+
+    # Return results
+    list(formula = formula, K = K, average_accuracy = avg_accuracy, seed = seed)
+}
+```
+
+
+```{r}
+# Refer to the Rmd File for the implementation of cv_qda
+result <- cv_qda(data, Car_Acceptability ~ Car_Price + Maintenance_Price
+          + Car_Capacity + Luggage_Size + Car_Safety, K = 5, seed = 11)
+print(result)
+
+```
+
+- **Cross-Validation Technique**: The model's predictive accuracy was assessed using 5-fold cross-validation. This method enhances the reliability of the accuracy estimate by training and validating the model on different subsets of the dataset.
+
+- **Number of Folds (K)**: The value of K was chosen to be 5. This number is a standard practice in cross-validation, balancing the trade-off between training set size and the variance of the model's accuracy estimate.
+
+- **Average Accuracy**: The average accuracy across the 5 folds was approximately `98.08%`, indicating a strong predictive performance of the model.
+
+
+### Cross-validation VS validation approach
+
+The enhanced performance with 5-fold cross-validation, as compared to the traditional validation approach **94.23% accuracy**, indicates that cross-validation provides a **more robust** and **generalized assessment**. This is likely because cross-validation reduces the risk of overfitting by testing the model on multiple subsets of the data, thereby offering a more comprehensive evaluation of the model's true predictive capabilities.
+
+***
+
+# Bootstrap
+
+* We will perform the bootsrap on the logistic regression model and analyze the results to assess the variability of the estimates.
+
+```{r warning=FALSE, message= FALSE, echo=FALSE}
+set.seed(2)
+```
+
+```{r warning=FALSE, message= FALSE}
+
+data$Car_Acceptability <- as.integer(data$Car_Acceptability)
+
+boot.fn=function(data,index){
+ return(coef(glm.fit <- glm(Car_Acceptability ~ Car_Price + Maintenance_Price + 
+                 Car_Capacity + Luggage_Size +
+                 Car_Safety, data = data, family = "binomial", subset=index)))
+  }
+
+boot.fn(data,1:260)
+```
+
+* Creating bootstrap estimates by randomly sampling from among the observations with replacement.
+
+```{r warning=FALSE, message= FALSE}
+boot.fn(data,sample(260,260,replace=TRUE))
+```
+
+* Using `boot()` function to compute the standard errors of `5 bootstrap estimates`.
+
+```{r warning=FALSE, message= FALSE}
+boot(data ,boot.fn , 5)
+```
+
+* A **positive bias** for the intercept and some coefficients suggests overestimation in the bootstrap samples.
+
+* **Negative biases** for *Car_Price and Maintenance_Price coefficients*, combined with the **largest standard errors**, show these estimates are highly variable and possibly underestimated.
+
+* *Car_Capacity* has a relatively **smaller standard error**, indicating a more stable estimate.
+
+* Both *Luggage_Size and Car_Safety coefficients* exhibit **positive biases**, with *Car_Safety* having a notably **high positive bias**, implying potential overestimation.
+
+
+# Conclusion
+
+To recap all of what was previously mentioned and shed light on the essential findings:
+
+* **LDA, QDA, and Logistic Regression**: 
+Out of these three methods, QDA was found to perform best. This is measured in terms of AUC, with QDA having the highest AUC of around 0.986. Moreover, as we can expect, both linear-shape assuming methods performed similarly with slightly lower AUCs of around 0.97 for both. (AUC for LDA is slightly higher than logistic regression). 
+Based on what was previously said, it can only make sense to see that QDA, out of the three methods, has the lowest test error, higher F1 score and recall, as well as a 100% precision! All of this goes to reassert that QDA performed best. This can help us assume that the decision boundary between the classes tends to be more flexible and not fully linear. 
+
+* **KNN**: 
+KNN analysis with K values from 3 to 50 showed optimal performance at K=20, yet it underperformed compared to LDA, QDA, and logistic regression, as indicated by its lower accuracy and higher test error even at its best.
+
+
+* **5-Fold Cross Validation**:
+Applying 5-fold cross-validation to the QDA method yielded improved accuracy compared to the single validation set approach.
+
+* **Bootstrap**:
+The bootstrap on the logistic model indicated variability in feature estimates: Car Price and Maintenance Price had negative biases and high standard errors, suggesting underestimation and variability. Car Capacity showed a positive bias with the lowest standard error, indicating reliability. Luggage Size and Car Safety had positive biases, with Car Safety notably higher, hinting at overestimation.
+
